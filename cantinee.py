@@ -1,94 +1,72 @@
 import streamlit as st
-from streamlit_gsheets import GSheetsConnection
 import pandas as pd
 from datetime import datetime
+import os
 
-# --- Page Config ---
+# --- Page Setup ---
 st.set_page_config(page_title="Canteen 2026", layout="wide")
+DB_FILE = "orders.csv"  # This will act as our Excel sheet
+MENU = {"Chicken Rice": 80, "Sambar Rice": 50, "Veg Burger": 60, "Coffee": 20}
 
-# Menu and Prices
-MENU = {
-    "Chicken Rice": 80,
-    "Sambar Rice": 50,
-    "Veg Burger": 60,
-    "Coffee": 20
-}
-
-# --- Connect to Google Sheets ---
-# This uses the [connections.gsheets] from your Streamlit Secrets
-conn = st.connection("gsheets", type=GSheetsConnection)
-
-# --- Sidebar Navigation ---
+# --- Sidebar ---
 st.sidebar.title("🔐 Access Control")
 role = st.sidebar.radio("Select View:", ["Student View", "Manager Login"])
 
 # ---------------- STUDENT VIEW ----------------
 if role == "Student View":
-    st.title("🍽️ Place Your Order")
-    
+    st.title("🍽️ Order Food")
     with st.form("order_form", clear_on_submit=True):
-        u_name = st.text_input("Full Name").replace(",", "")
+        u_name = st.text_input("Name").replace(",", "")
         u_roll = st.text_input("Roll Number").replace(",", "")
-        u_item = st.selectbox("Select Item", list(MENU.keys()))
-
-        st.info(f"Amount to Pay: ₹{MENU[u_item]}")
-        submitted = st.form_submit_button("Confirm & Order")
-
-        if submitted:
+        u_item = st.selectbox("Choose Item", list(MENU.keys()))
+        
+        if st.form_submit_button("Confirm Order"):
             if u_name and u_roll:
-                try:
-                    # 1. Read existing data from Google Sheets
-                    existing_data = conn.read(ttl=0)
-                    
-                    # 2. Prepare new row
-                    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                    new_row = pd.DataFrame([{
-                        "Name": u_name,
-                        "Roll No": u_roll,
-                        "Item": u_item,
-                        "Price": MENU[u_item],
-                        "Time": now
-                    }])
-
-                    # 3. Add new row to existing data and update Google Sheet
-                    updated_df = pd.concat([existing_data, new_row], ignore_index=True)
-                    conn.update(data=updated_df)
-
-                    st.success(f"Order for {u_item} recorded in Google Sheets!")
-                    st.balloons()
-                except Exception as e:
-                    st.error("Connection Error: Make sure your Google Sheet is set to 'Anyone with link can Edit'")
+                now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                new_row = pd.DataFrame([[u_name, u_roll, u_item, MENU[u_item], now]], 
+                                     columns=["Name", "Roll No", "Item", "Price", "Time"])
+                
+                # Save to the local virtual server file
+                if not os.path.isfile(DB_FILE):
+                    new_row.to_csv(DB_FILE, index=False)
+                else:
+                    new_row.to_csv(DB_FILE, mode='a', header=False, index=False)
+                
+                st.success(f"Order for {u_item} placed! Manager can see it now.")
+                st.balloons()
             else:
-                st.warning("Please enter your Name and Roll Number.")
+                st.error("Please enter Name and Roll Number.")
 
 # ---------------- MANAGER VIEW ----------------
 else:
     st.title("👨‍🍳 Manager Dashboard")
+    # Pull password from Streamlit Secrets (admin123)
+    password = st.text_input("Enter Manager Password", type="password")
     
-    # This pulls 'manager_password' from your Streamlit Secrets TOML
-    password_attempt = st.text_input("Enter Manager Password", type="password")
-
-    if password_attempt == st.secrets["manager_password"]:
-        st.success("Access Granted")
+    if password == st.secrets["manager_password"]:
+        st.success("Login Successful")
         
-        # Pull fresh data from Google Sheets
-        df = conn.read(ttl=0)
-
-        if not df.empty:
-            # Summary View
-            st.subheader("📊 Today's Preparation Summary")
-            summary = df.groupby("Item").size().reset_index(name='Quantity')
+        if os.path.exists(DB_FILE):
+            df = pd.read_csv(DB_FILE)
+            
+            # Show summary
+            st.subheader("📊 Kitchen Summary")
+            summary = df.groupby("Item").size().reset_index(name='Count')
             st.table(summary)
 
-            # Full Order View
-            st.subheader("📝 Live Order List (Excel View)")
+            # Show the Excel Sheet
+            st.subheader("📝 Order List")
             st.dataframe(df, use_container_width=True)
-
-            # Download Button
+            
+            # --- THE IMPORTANT PART: DOWNLOAD TO YOUR COMPUTER ---
+            st.markdown("---")
             csv = df.to_csv(index=False).encode('utf-8')
-            st.download_button("📥 Download Excel (CSV)", data=csv, file_name="canteen_orders.csv")
+            st.download_button(
+                label="📥 Download Data to My System (Excel/CSV)",
+                data=csv,
+                file_name=f"canteen_orders_{datetime.now().strftime('%Y%m%d')}.csv",
+                mime="text/csv",
+            )
         else:
-            st.info("No orders found in Google Sheets yet.")
+            st.info("No orders found yet.")
 
-    elif password_attempt != "":
-        st.error("Incorrect Password")
